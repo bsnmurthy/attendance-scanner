@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Barcode Attendance Scanner</title>
+
+  <!-- QR / Barcode scanner library -->
+  <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 0;
+      padding: 20px;
+      background: #f4f6f9;
+      text-align: center;
+    }
+
+    .container {
+      max-width: 550px;
+      margin: auto;
+      background: white;
+      padding: 20px;
+      border-radius: 16px;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.12);
+    }
+
+    h1 {
+      color: #1a73e8;
+      margin-bottom: 10px;
+      font-size: 32px;
+    }
+
+    p {
+      margin-bottom: 18px;
+      color: #333;
+      font-size: 18px;
+    }
+
+    button {
+      width: 100%;
+      padding: 14px;
+      margin: 10px 0;
+      font-size: 18px;
+      border: none;
+      border-radius: 10px;
+      cursor: pointer;
+      color: white;
+    }
+
+    .start-btn {
+      background: #1a73e8;
+    }
+
+    .start-btn:hover {
+      background: #0f5bd3;
+    }
+
+    .stop-btn {
+      background: #d93025;
+    }
+
+    .stop-btn:hover {
+      background: #b3261e;
+    }
+
+    #reader {
+      width: 100%;
+      margin-top: 20px;
+      display: none;
+      min-height: 320px;
+    }
+
+    .status {
+      margin-top: 18px;
+      padding: 14px;
+      border-radius: 10px;
+      font-weight: bold;
+      display: none;
+      text-align: left;
+      font-size: 17px;
+      word-break: break-word;
+    }
+
+    .success {
+      background: #e6f4ea;
+      color: #137333;
+      display: block;
+    }
+
+    .error {
+      background: #fce8e6;
+      color: #c5221f;
+      display: block;
+    }
+
+    .info {
+      background: #e8f0fe;
+      color: #174ea6;
+      display: block;
+    }
+
+    .scan-box {
+      margin-top: 16px;
+      text-align: left;
+      background: #fafafa;
+      border: 1px solid #ddd;
+      border-radius: 10px;
+      padding: 12px;
+      font-size: 16px;
+      word-break: break-word;
+    }
+
+    .small {
+      font-size: 14px;
+      color: #555;
+      margin-top: 8px;
+    }
+
+    .counter {
+      margin-top: 14px;
+      font-size: 18px;
+      font-weight: bold;
+      color: #1a73e8;
+    }
+
+    @media (max-width: 600px) {
+      h1 { font-size: 26px; }
+      p { font-size: 16px; }
+      button { font-size: 16px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Barcode Attendance Scanner</h1>
+    <p>Scan student ID barcode / QR and save to Google Sheet</p>
+
+    <button class="start-btn" onclick="startScanner()">Start Scanner</button>
+    <button class="stop-btn" onclick="stopScanner()">Stop Scanner</button>
+
+    <div class="counter">Today Scanned (this session): <span id="scanCount">0</span></div>
+
+    <div id="reader"></div>
+
+    <div id="status" class="status"></div>
+
+    <div id="scanValue" class="scan-box" style="display:none;"></div>
+
+    <div class="small">
+      Duplicate rule: same barcode scanned again on the same day will not be stored.
+    </div>
+  </div>
+
+  <script>
+    // =========================
+    // IMPORTANT: PASTE YOUR APPS SCRIPT WEB APP URL BELOW
+    // =========================
+    const API_URL = "https://script.google.com/macros/s/AKfycbyYERQp0hPQsjI-pquSNC1nlaUdK5aytYBx1Zep-bBRTpFdtiBBr4NLsR_0_zLU-kVECA/exec";
+
+    let html5QrCode;
+    let scannerRunning = false;
+    let scanLock = false;
+    let sessionCount = 0;
+
+    function showStatus(message, type) {
+      const status = document.getElementById("status");
+      status.className = "status " + type;
+      status.innerText = message;
+      status.style.display = "block";
+    }
+
+    function showScanValue(text) {
+      const box = document.getElementById("scanValue");
+      box.style.display = "block";
+      box.innerHTML = "<b>Scanned Barcode:</b> " + text;
+    }
+
+    function updateCount() {
+      document.getElementById("scanCount").innerText = sessionCount;
+    }
+
+    async function startScanner() {
+      if (scannerRunning) return;
+
+      if (!API_URL || API_URL.includes("PASTE_YOUR_APPS_SCRIPT_WEB_APP_URL_HERE")) {
+        showStatus("Please set the Apps Script API URL in index.html first.", "error");
+        return;
+      }
+
+      document.getElementById("reader").style.display = "block";
+      html5QrCode = new Html5Qrcode("reader");
+
+      try {
+        await html5QrCode.start(
+          { facingMode: "environment" },   // rear camera on mobile
+          {
+            fps: 10,
+            qrbox: { width: 250, height: 250 },
+            aspectRatio: 1.333
+          },
+          onScanSuccess,
+          onScanFailure
+        );
+
+        scannerRunning = true;
+        showStatus("Scanner started. Point camera at student barcode / QR.", "info");
+
+      } catch (err) {
+        showStatus("Camera start error: " + err, "error");
+      }
+    }
+
+    async function stopScanner() {
+      if (html5QrCode && scannerRunning) {
+        try {
+          await html5QrCode.stop();
+          scannerRunning = false;
+          document.getElementById("reader").style.display = "none";
+          showStatus("Scanner stopped.", "info");
+        } catch (err) {
+          showStatus("Error stopping scanner: " + err, "error");
+        }
+      }
+    }
+
+    function onScanFailure(error) {
+      // Ignore continuous scan failure logs
+    }
+
+    async function onScanSuccess(decodedText) {
+      if (scanLock) return;
+      scanLock = true;
+
+      const barcodeValue = decodedText.trim();
+      showScanValue(barcodeValue);
+      showStatus("Processing scan...", "info");
+
+      try {
+        const response = await fetch(API_URL, {
+          method: "POST",
+          headers: {
+            "Content-Type": "text/plain;charset=utf-8"
+          },
+          body: JSON.stringify({
+            barcodeValue: barcodeValue
+          })
+        });
+
+        const result = await response.json();
+
+        if (result.success) {
+          sessionCount++;
+          updateCount();
+          showStatus("Saved: " + result.barcodeValue, "success");
+          beepSuccess();
+        } else if (result.duplicate) {
+          showStatus(result.message, "error");
+          beepDuplicate();
+        } else {
+          showStatus(result.message || "Failed to save attendance", "error");
+        }
+
+      } catch (err) {
+        showStatus("Network/API error: " + err, "error");
+      }
+
+      setTimeout(() => {
+        scanLock = false;
+      }, 1500);
+    }
+
+    function beepSuccess() {
+      try {
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const oscillator = audioCtx.createOscillator();
+        const gainNode = audioCtx.createGain();
+
+        oscillator.connect(gainNode);
+        gainNode.connect(audioCtx.destination);
+
+        oscillator.type = "sine";
+        oscillator.frequency.value = 880;
+        gainNode.gain.value = 0.1;
+
+        oscillator.start();
+        setTimeout(() => oscillator.stop(), 150);
+      } catch (e) {}
+    }
+
+    function beepDuplicate() {
+      try {
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const oscillator = audioCtx.createOscillator();
+        const gainNode = audioCtx.createGain();
+
+        oscillator.connect(gainNode);
+        gainNode.connect(audioCtx.destination);
+
+        oscillator.type = "square";
+        oscillator.frequency.value = 300;
+        gainNode.gain.value = 0.08;
+
+        oscillator.start();
+        setTimeout(() => oscillator.stop(), 250);
+      } catch (e) {}
+    }
+  </script>
+</body>
+</html>
