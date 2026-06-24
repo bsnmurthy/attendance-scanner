@@ -5,7 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Barcode Attendance Scanner</title>
 
-  <!-- QR / Barcode scanner library -->
   <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
 
   <style>
@@ -101,6 +100,12 @@
       display: block;
     }
 
+    .warning {
+      background: #fff4e5;
+      color: #9a6700;
+      display: block;
+    }
+
     .scan-box {
       margin-top: 16px;
       text-align: left;
@@ -123,6 +128,16 @@
       font-size: 18px;
       font-weight: bold;
       color: #1a73e8;
+    }
+
+    .confirm-box {
+      margin-top: 12px;
+      padding: 12px;
+      border: 1px dashed #f4b400;
+      background: #fffdf5;
+      border-radius: 10px;
+      text-align: left;
+      display: none;
     }
 
     @media (max-width: 600px) {
@@ -148,21 +163,28 @@
 
     <div id="scanValue" class="scan-box" style="display:none;"></div>
 
+    <div id="confirmBox" class="confirm-box"></div>
+
     <div class="small">
-      Duplicate rule: same barcode scanned again on the same day will not be stored.
+      Protection enabled: the same barcode must be scanned <b>twice consecutively</b> before saving.
     </div>
   </div>
 
   <script>
-    // =========================
-    // IMPORTANT: PASTE YOUR APPS SCRIPT WEB APP URL BELOW
-    // =========================
+    // =========================================================
+    // IMPORTANT: KEEP YOUR APPS SCRIPT WEB APP URL HERE
+    // =========================================================
     const API_URL = "https://script.google.com/macros/s/AKfycbyYERQp0hPQsjI-pquSNC1nlaUdK5aytYBx1Zep-bBRTpFdtiBBr4NLsR_0_zLU-kVECA/exec";
 
     let html5QrCode;
     let scannerRunning = false;
     let scanLock = false;
     let sessionCount = 0;
+
+    // Two-scan confirmation variables
+    let pendingBarcode = null;       // first scanned barcode waiting for confirmation
+    let pendingTime = null;          // time of first scan
+    const CONFIRM_TIMEOUT_MS = 15000; // if second scan not done within 15 sec, reset
 
     function showStatus(message, type) {
       const status = document.getElementById("status");
@@ -181,6 +203,28 @@
       document.getElementById("scanCount").innerText = sessionCount;
     }
 
+    function showConfirmBox(message) {
+      const box = document.getElementById("confirmBox");
+      box.style.display = "block";
+      box.innerHTML = message;
+    }
+
+    function hideConfirmBox() {
+      const box = document.getElementById("confirmBox");
+      box.style.display = "none";
+      box.innerHTML = "";
+    }
+
+    function normalizeBarcode(text) {
+      return (text || "").toString().trim().toUpperCase();
+    }
+
+    function resetPendingScan() {
+      pendingBarcode = null;
+      pendingTime = null;
+      hideConfirmBox();
+    }
+
     async function startScanner() {
       if (scannerRunning) return;
 
@@ -194,7 +238,7 @@
 
       try {
         await html5QrCode.start(
-          { facingMode: "environment" },   // rear camera on mobile
+          { facingMode: "environment" },
           {
             fps: 10,
             qrbox: { width: 250, height: 250 },
@@ -205,7 +249,7 @@
         );
 
         scannerRunning = true;
-        showStatus("Scanner started. Point camera at student barcode / QR.", "info");
+        showStatus("Scanner started. Scan a barcode / QR.", "info");
 
       } catch (err) {
         showStatus("Camera start error: " + err, "error");
@@ -218,6 +262,7 @@
           await html5QrCode.stop();
           scannerRunning = false;
           document.getElementById("reader").style.display = "none";
+          resetPendingScan();
           showStatus("Scanner stopped.", "info");
         } catch (err) {
           showStatus("Error stopping scanner: " + err, "error");
@@ -226,45 +271,94 @@
     }
 
     function onScanFailure(error) {
-      // Ignore continuous scan failure logs
+      // ignore repeated scan failures
     }
 
     async function onScanSuccess(decodedText) {
       if (scanLock) return;
       scanLock = true;
 
-      const barcodeValue = decodedText.trim();
-      showScanValue(barcodeValue);
-      showStatus("Processing scan...", "info");
+      const scanned = normalizeBarcode(decodedText);
+      showScanValue(scanned);
 
-      try {
-        const response = await fetch(API_URL, {
-          method: "POST",
-          headers: {
-            "Content-Type": "text/plain;charset=utf-8"
-          },
-          body: JSON.stringify({
-            barcodeValue: barcodeValue
-          })
-        });
+      const now = Date.now();
 
-        const result = await response.json();
+      // If there is a pending first scan but it is too old, reset it
+      if (pendingTime && (now - pendingTime > CONFIRM_TIMEOUT_MS)) {
+        resetPendingScan();
+      }
 
-        if (result.success) {
-          sessionCount++;
-          updateCount();
-          showStatus("Saved: " + result.barcodeValue, "success");
-          beepSuccess();
-        } else if (result.duplicate) {
-          showStatus(result.message, "error");
-          beepDuplicate();
-        } else {
-          showStatus(result.message || "Failed to save attendance", "error");
+      // CASE 1: No pending barcode yet → store first scan, ask to scan again
+      if (!pendingBarcode) {
+        pendingBarcode = scanned;
+        pendingTime = now;
+
+        showStatus("First scan captured. Please scan the same card once again to confirm.", "warning");
+        showConfirmBox(
+          "<b>Waiting for confirmation scan</b><br>" +
+          "First scan value: <b>" + pendingBarcode + "</b><br>" +
+          "Scan the same card again within 15 seconds."
+        );
+
+        setTimeout(() => {
+          scanLock = false;
+        }, 1000);
+        return;
+      }
+
+      // CASE 2: Second scan matches first scan → save to backend
+      if (scanned === pendingBarcode) {
+        const confirmedBarcode = pendingBarcode;
+        resetPendingScan();
+
+        showStatus("Confirmed. Saving attendance...", "info");
+
+        try {
+          const response = await fetch(API_URL, {
+            method: "POST",
+            headers: {
+              "Content-Type": "text/plain;charset=utf-8"
+            },
+            body: JSON.stringify({
+              barcodeValue: confirmedBarcode
+            })
+          });
+
+          const result = await response.json();
+
+          if (result.success) {
+            sessionCount++;
+            updateCount();
+            showStatus("Attendance saved: " + result.barcodeValue, "success");
+            beepSuccess();
+          } else if (result.duplicate) {
+            showStatus(result.message, "error");
+            beepDuplicate();
+          } else {
+            showStatus(result.message || "Failed to save attendance", "error");
+          }
+
+        } catch (err) {
+          showStatus("Network/API error: " + err, "error");
         }
 
-      } catch (err) {
-        showStatus("Network/API error: " + err, "error");
+        setTimeout(() => {
+          scanLock = false;
+        }, 1500);
+        return;
       }
+
+      // CASE 3: Second scan does NOT match first scan → reset and ask again
+      const firstValue = pendingBarcode;
+      resetPendingScan();
+
+      showStatus("Mismatch detected. Scans did not match, so nothing was saved. Please scan again from the beginning.", "error");
+      showConfirmBox(
+        "<b>Scan mismatch</b><br>" +
+        "First scan: <b>" + firstValue + "</b><br>" +
+        "Second scan: <b>" + scanned + "</b><br>" +
+        "No attendance saved. Please rescan the card carefully."
+      );
 
       setTimeout(() => {
         scanLock = false;
