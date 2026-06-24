@@ -17,7 +17,7 @@
     }
 
     .container {
-      max-width: 550px;
+      max-width: 560px;
       margin: auto;
       background: white;
       padding: 20px;
@@ -28,13 +28,13 @@
     h1 {
       color: #1a73e8;
       margin-bottom: 10px;
-      font-size: 32px;
+      font-size: 30px;
     }
 
     p {
-      margin-bottom: 18px;
+      margin-bottom: 16px;
       color: #333;
-      font-size: 18px;
+      font-size: 17px;
     }
 
     button {
@@ -48,21 +48,11 @@
       color: white;
     }
 
-    .start-btn {
-      background: #1a73e8;
-    }
+    .start-btn { background: #1a73e8; }
+    .start-btn:hover { background: #0f5bd3; }
 
-    .start-btn:hover {
-      background: #0f5bd3;
-    }
-
-    .stop-btn {
-      background: #d93025;
-    }
-
-    .stop-btn:hover {
-      background: #b3261e;
-    }
+    .stop-btn { background: #d93025; }
+    .stop-btn:hover { background: #b3261e; }
 
     #reader {
       width: 100%;
@@ -78,7 +68,7 @@
       font-weight: bold;
       display: none;
       text-align: left;
-      font-size: 17px;
+      font-size: 16px;
       word-break: break-word;
     }
 
@@ -115,19 +105,7 @@
       padding: 12px;
       font-size: 16px;
       word-break: break-word;
-    }
-
-    .small {
-      font-size: 14px;
-      color: #555;
-      margin-top: 8px;
-    }
-
-    .counter {
-      margin-top: 14px;
-      font-size: 18px;
-      font-weight: bold;
-      color: #1a73e8;
+      display: none;
     }
 
     .confirm-box {
@@ -138,11 +116,27 @@
       border-radius: 10px;
       text-align: left;
       display: none;
+      font-size: 15px;
+    }
+
+    .counter {
+      margin-top: 14px;
+      font-size: 18px;
+      font-weight: bold;
+      color: #1a73e8;
+    }
+
+    .small {
+      font-size: 14px;
+      color: #555;
+      margin-top: 8px;
+      text-align: left;
+      line-height: 1.5;
     }
 
     @media (max-width: 600px) {
-      h1 { font-size: 26px; }
-      p { font-size: 16px; }
+      h1 { font-size: 24px; }
+      p { font-size: 15px; }
       button { font-size: 16px; }
     }
   </style>
@@ -158,21 +152,23 @@
     <div class="counter">Today Scanned (this session): <span id="scanCount">0</span></div>
 
     <div id="reader"></div>
-
     <div id="status" class="status"></div>
-
-    <div id="scanValue" class="scan-box" style="display:none;"></div>
-
+    <div id="scanValue" class="scan-box"></div>
     <div id="confirmBox" class="confirm-box"></div>
 
     <div class="small">
-      Protection enabled: the same barcode must be scanned <b>twice consecutively</b> before saving.
+      <b>Protections enabled:</b><br>
+      1. Same barcode must be scanned <b>twice consecutively</b> before saving.<br>
+      2. Only values with <b>exactly 10 characters</b> are accepted.<br>
+      3. Spaces are removed and lowercase letters are converted to uppercase before checking.
     </div>
   </div>
 
   <script>
     // =========================================================
-    // IMPORTANT: KEEP YOUR APPS SCRIPT WEB APP URL HERE
+    // PASTE YOUR APPS SCRIPT WEB APP URL HERE
+    // Example:
+    // const API_URL = "https://script.google.com/macros/s/AKfycbxxxx/exec";
     // =========================================================
     const API_URL = "https://script.google.com/macros/s/AKfycbyYERQp0hPQsjI-pquSNC1nlaUdK5aytYBx1Zep-bBRTpFdtiBBr4NLsR_0_zLU-kVECA/exec";
 
@@ -181,10 +177,13 @@
     let scanLock = false;
     let sessionCount = 0;
 
-    // Two-scan confirmation variables
-    let pendingBarcode = null;       // first scanned barcode waiting for confirmation
-    let pendingTime = null;          // time of first scan
-    const CONFIRM_TIMEOUT_MS = 15000; // if second scan not done within 15 sec, reset
+    // Two-scan confirmation
+    let pendingBarcode = null;
+    let pendingTime = null;
+    const CONFIRM_TIMEOUT_MS = 15000; // 15 seconds
+
+    // Expected cleaned roll number length
+    const EXPECTED_LENGTH = 10;
 
     function showStatus(message, type) {
       const status = document.getElementById("status");
@@ -196,11 +195,7 @@
     function showScanValue(text) {
       const box = document.getElementById("scanValue");
       box.style.display = "block";
-      box.innerHTML = "<b>Scanned Barcode:</b> " + text;
-    }
-
-    function updateCount() {
-      document.getElementById("scanCount").innerText = sessionCount;
+      box.innerHTML = "<b>Current Scanned Value:</b> " + text;
     }
 
     function showConfirmBox(message) {
@@ -215,14 +210,29 @@
       box.innerHTML = "";
     }
 
+    function updateCount() {
+      document.getElementById("scanCount").innerText = sessionCount;
+    }
+
+    // Normalize scanned barcode:
+    // - remove all spaces
+    // - uppercase letters
     function normalizeBarcode(text) {
-      return (text || "").toString().trim().toUpperCase();
+      return (text || "")
+        .toString()
+        .replace(/\s+/g, "")   // remove all spaces
+        .trim()
+        .toUpperCase();
     }
 
     function resetPendingScan() {
       pendingBarcode = null;
       pendingTime = null;
       hideConfirmBox();
+    }
+
+    function isValidLength(barcode) {
+      return barcode.length === EXPECTED_LENGTH;
     }
 
     async function startScanner() {
@@ -238,7 +248,7 @@
 
       try {
         await html5QrCode.start(
-          { facingMode: "environment" },
+          { facingMode: "environment" }, // rear camera on mobile
           {
             fps: 10,
             qrbox: { width: 250, height: 250 },
@@ -249,7 +259,7 @@
         );
 
         scannerRunning = true;
-        showStatus("Scanner started. Scan a barcode / QR.", "info");
+        showStatus("Scanner started. Scan a student barcode / QR.", "info");
 
       } catch (err) {
         showStatus("Camera start error: " + err, "error");
@@ -271,7 +281,7 @@
     }
 
     function onScanFailure(error) {
-      // ignore repeated scan failures
+      // Ignore continuous scan failures
     }
 
     async function onScanSuccess(decodedText) {
@@ -281,32 +291,48 @@
       const scanned = normalizeBarcode(decodedText);
       showScanValue(scanned);
 
+      // STEP 1: reject if cleaned length is not 10
+      if (!isValidLength(scanned)) {
+        resetPendingScan();
+        showStatus(
+          `Invalid scan length. Expected ${EXPECTED_LENGTH} characters after cleaning, but got ${scanned.length}. Please scan again.`,
+          "error"
+        );
+
+        showConfirmBox(
+          "<b>Rejected scan</b><br>" +
+          "Scanned value after cleaning: <b>" + scanned + "</b><br>" +
+          "Expected length: <b>" + EXPECTED_LENGTH + "</b> characters."
+        );
+
+        setTimeout(() => { scanLock = false; }, 1200);
+        return;
+      }
+
       const now = Date.now();
 
-      // If there is a pending first scan but it is too old, reset it
+      // If first scan waited too long, clear it
       if (pendingTime && (now - pendingTime > CONFIRM_TIMEOUT_MS)) {
         resetPendingScan();
       }
 
-      // CASE 1: No pending barcode yet → store first scan, ask to scan again
+      // STEP 2: first valid scan → ask for second confirmation scan
       if (!pendingBarcode) {
         pendingBarcode = scanned;
         pendingTime = now;
 
-        showStatus("First scan captured. Please scan the same card once again to confirm.", "warning");
+        showStatus("First scan accepted. Please scan the same card once again to confirm.", "warning");
         showConfirmBox(
           "<b>Waiting for confirmation scan</b><br>" +
-          "First scan value: <b>" + pendingBarcode + "</b><br>" +
+          "First cleaned value: <b>" + pendingBarcode + "</b><br>" +
           "Scan the same card again within 15 seconds."
         );
 
-        setTimeout(() => {
-          scanLock = false;
-        }, 1000);
+        setTimeout(() => { scanLock = false; }, 1000);
         return;
       }
 
-      // CASE 2: Second scan matches first scan → save to backend
+      // STEP 3: second scan matches first → save
       if (scanned === pendingBarcode) {
         const confirmedBarcode = pendingBarcode;
         resetPendingScan();
@@ -342,27 +368,23 @@
           showStatus("Network/API error: " + err, "error");
         }
 
-        setTimeout(() => {
-          scanLock = false;
-        }, 1500);
+        setTimeout(() => { scanLock = false; }, 1500);
         return;
       }
 
-      // CASE 3: Second scan does NOT match first scan → reset and ask again
+      // STEP 4: second scan does not match first → reject and reset
       const firstValue = pendingBarcode;
       resetPendingScan();
 
-      showStatus("Mismatch detected. Scans did not match, so nothing was saved. Please scan again from the beginning.", "error");
+      showStatus("Scan mismatch. Nothing was saved. Please rescan from the beginning.", "error");
       showConfirmBox(
         "<b>Scan mismatch</b><br>" +
-        "First scan: <b>" + firstValue + "</b><br>" +
-        "Second scan: <b>" + scanned + "</b><br>" +
-        "No attendance saved. Please rescan the card carefully."
+        "First cleaned value: <b>" + firstValue + "</b><br>" +
+        "Second cleaned value: <b>" + scanned + "</b><br>" +
+        "No attendance saved. Please scan carefully again."
       );
 
-      setTimeout(() => {
-        scanLock = false;
-      }, 1500);
+      setTimeout(() => { scanLock = false; }, 1500);
     }
 
     function beepSuccess() {
